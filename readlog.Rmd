@@ -1,0 +1,348 @@
+---
+---
+---
+
+```{r}
+library(stringr)
+# Read lines
+ll  = readLines("MergedAuth.log")
+ll <- ll[ll != ""]
+indices <- grep("^# (.+\\.log)$", ll)
+title <- ll[indices]
+
+subll <- ll[indices[4]+1: (length(ll)+1)]
+
+read.log <- function(ll, start, end){
+#
+
+  #pattern <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) ((?:[a-zA-Z0-9.-]+(?:\\s*[a-zA-Z0-9.-]+)*(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+  pattern <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+)\\s+((?:[a-zA-Z0-9.-]+(?:\\s*[a-zA-Z0-9.-]+)*(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+
+  # Read line
+  subll <- ll[(start+1): (end-1)]
+  #testg <- grepl(pattern, auth2_ll)
+  # Use str_match() to get the captured groups
+  matrix <- str_match(subll, pattern)
+  df <- as.data.frame(matrix)
+  df<-df[,-1]
+  df <- cbind(df, c(ll[start]))
+  df[,1] <- as.POSIXct(strptime(df[,1], "%b %d %H:%M:%S"))
+  colnames(df) <- c("date-time", "logging host", "app", "PID", "message", "log file")
+  df$PID <- as.numeric(df$PID)
+  return(df)
+}
+
+
+df1 <- read.log(ll, indices[1], indices[2])
+df2 <- read.log(ll, indices[2], indices[3])
+df3 <- read.log(ll, indices[3], indices[4])
+df4 <- read.log(ll, indices[4], indices[5])
+df5 <- read.log(ll, indices[5], length(ll)+1)
+
+
+
+
+df <- rbind(df1, df2, df3, df4, df5)
+
+
+# Verify
+length(ll) - 5 == dim(df1)[1]+dim(df2)[1]+dim(df3)[1]+dim(df4)[1]+dim(df5)[1]
+
+#df4 <- read.log(ll, indices[4], (length(ll)+1))
+#df4
+#row_indices_with_na <- which(apply(df4, 1, function(x) any(is.na(x))))
+#row_indices_with_na
+```
+
+```{r}
+df <- rbind(df1, df2, df3, df4, df5)
+nrow(df)
+
+
+
+```
+
+# Data Validation and Exploration
+
+## Verify that the PIDs are all numbers
+
+```{r}
+all(sapply(df$PID, function(x) is.numeric(x)))
+```
+
+## How many lines are in each log file?
+
+```{r}
+dim(df1)[1]
+dim(df2)[1]
+dim(df3)[1]
+dim(df4)[1]
+dim(df5)[1]
+```
+
+## What are the range of date-times for the messages? for each of the different log files in the combined file? How many
+
+days does each log file span?
+
+```{r}
+print("Range of data time for all")
+range(df$`date-time`)
+
+print("Range of day in each file")
+print(df1$`log file`[1])
+range(df1$`date-time`)
+
+print(df2$`log file`[1])
+range(df2$`date-time`)
+
+print(df3$`log file`[1])
+range(df3$`date-time`)
+
+print(df4$`log file`[1])
+range(df4$`date-time`)
+
+print(df5$`log file`[1])
+range(df5$`date-time`)
+
+print("days spans in each")
+print(df1$`log file`[1])
+diff(range(df1$`date-time`))
+print(df2$`log file`[1])
+diff(range(df2$`date-time`))
+print(df3$`log file`[1])
+diff(range(df3$`date-time`))
+print(df4$`log file`[1])
+diff(range(df4$`date-time`))
+print(df5$`log file`[1])
+diff(range(df5$`date-time`))
+```
+
+## Do the application names contain numbers? If so, are they just versions, e.g. ssh2, or is there additional structure to the
+
+numbers?
+
+According to the output, we observe the numbers are separated by periods.
+
+```{r}
+a <- unique(df$app)
+a[grepl("\\d+", a)]
+```
+
+## Is the host value constant/the same for all records in each log file?
+
+Make logging host unique, we found that the host values are not constant.
+
+```{r}
+unique(df$`logging host`)
+```
+
+## What are the most common apps (daemons/programs) that are logging information on each of the different hosts?
+
+```{r}
+print(df1$`log file`[1])
+which.max(table(df1$app))
+print(df2$`log file`[1])
+which.max(table(df2$app))
+print(df3$`log file`[1])
+which.max(table(df3$app))
+print(df4$`log file`[1])
+which.max(table(df4$app))
+print(df5$`log file`[1])
+which.max(table(df5$app))
+```
+
+# Logins - valid and invalid
+
+## Find valid/successful logins
+
+### What are the user names and Internet Protocol (IP) addresses of those logins
+
+The valid users are shown below.
+
+```{r}
+# Filt all rows realated to login
+login_df <- df[grepl("systemd-logind|sshd", df$`app`, ignore.case = TRUE),]
+login_df <- login_df[grepl("user", login_df$message, ignore.case = TRUE),]
+# make the message unique to see the types
+#unique(login_df$message)
+
+```
+
+```{r}
+# Filter the invalids
+#notlogin <- "server listening|watching system buttons|new seat|removed session|Received signal|Close session"
+invalid <- "did not|fatal|invalid|failed|failure|closed|not|warning|disconnect|bad|corrupted|error"
+invalid_df <- login_df[grepl(invalid, login_df$message, ignore.case = TRUE),]
+valid_df <- login_df[!grepl(invalid, login_df$message, ignore.case = TRUE),]
+
+```
+
+```{r}
+user_pattern <- "(?i)(?<=user\\s)([a-z0-9_-]+|\\\\{1,2}\\d+)|(?<=for\\s)(elastic_user_\\d+)"
+invalid_user_matrix <- str_match(invalid_df$message, user_pattern)
+invalid_user <- invalid_user_matrix[,2]
+invalid_user <- unique(invalid_user)
+```
+
+```{r}
+valid_user_matrix <- str_match(valid_df$message, user_pattern)
+valid_user <- valid_user_matrix[,2]
+unique(valid_user)
+```
+
+## Find the invalid user login/ids
+
+### What were the associated IPs
+
+```{r}
+#unique(invalid_df$`logging host`)
+ip_pattern <- "(?:from) ([0-9.]+)"
+invalid_ip_from_matrix <- str_match(invalid_df$message, ip_pattern)
+invalid_ip_from <- unique(invalid_ip_from_matrix)[,2]
+invalid_ip_from
+```
+
+### Were there multiple invalid user logins from the same IP addresses
+
+Yes
+
+```{r}
+library(dplyr)
+
+users <- str_extract(invalid_df$message, user_pattern)
+
+ips <- str_extract(invalid_df$message, "(?<=from)\\s([0-9.]+)")
+
+invalid_user_ip_df <- data.frame(user = users, ip = ips)
+invalid_user_ip_df <- na.omit(invalid_user_ip_df)
+invalid_user_ip_df
+invalid_duplicate_ips <- invalid_user_ip_df %>%
+  group_by(ip) %>%
+  summarise(num_users = n_distinct(user)) %>%
+  filter(num_users > 1)
+invalid_duplicate_ips
+```
+
+### Were there valid logins from those IP addresses
+
+Yes, there are three of them shown below
+
+```{r}
+users <- str_extract(valid_df$message, user_pattern)
+
+ips <- str_extract(valid_df$message, "(?<=from)\\s([0-9.]+)")
+
+valid_user_ip_df <- data.frame(user = users, ip = ips)
+valid_user_ip_df <- na.omit(valid_user_ip_df)
+valid_user_ip_df
+valid_duplicate_ips <- valid_user_ip_df %>%
+  group_by(ip) %>%
+  summarise(num_users = n_distinct(user)) %>%
+  filter(num_users > 1)
+valid_duplicate_ips
+```
+
+### Are there multiple IPs using the same invalid login?
+
+#### ∗ Are these related IPs, e.g., from the same network/domain?
+
+Yes, and they are all elastic users.
+
+```{r}
+duplicate_users <- valid_user_ip_df %>%
+  group_by(user) %>%
+  summarise(num_ips = n_distinct(ip)) %>%
+  filter(num_ips > 1)
+duplicate_users
+```
+
+### What IP address had too many authentication failures.
+
+188.87.35.25 has the most failures.
+
+```{r}
+ip_pattern <- "(?:from) ([0-9.]+)"
+invalid_ip_from_matrix <- str_match(invalid_df$message, ip_pattern)
+invalid_ip_from <- na.omit(invalid_ip_from_matrix[,2])
+which.max(table(invalid_ip_from))
+```
+
+# Sudo commands
+
+## What are the executables/programs run via sudo
+
+### -- By what user
+
+The users are all root
+
+```{r}
+sudodf <- df[df$`app` == "sudo", ]
+sudo_user_pattern <- "(?i)(?<=user\\s)([a-z0-9_-]+|\\\\{1,2}\\d+)|(?i)(?<=user=)([a-z0-9_-]+|\\\\{1,2}\\d+)"
+users <- str_extract(sudodf$message, sudo_user_pattern)
+userroot <- str_extract(sudodf$message, "(?<=COMMAND)(.*)")
+unique(na.omit(userroot))
+#sudodf[is.na(users),]
+```
+
+### -- What machine are they on?
+
+The machine are the logging host itself, so they are
+
+```{r}
+sudodf$`logging host`
+```
+
+# TEST CODE CHUNK
+
+```{r, eval=FALSE}
+library(stringr)
+
+ll  = readLines("MergedAuth.log")
+ll <- ll[ll != ""]
+indices <- grep("^# (.+\\.log)$", ll)
+ll[indices]
+#pattern  <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) ((?:[a-zA-Z0-9.-]+(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+pattern <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+)\\s+((?:[a-zA-Z0-9.-]+(?:\\s*[a-zA-Z0-9.-]+)*(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+subll <- ll[(indices[5]+1): (length(ll)+1)]
+test <- grepl(pattern, subll)
+subll[!test]
+
+#pattern <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) ((?:[a-zA-Z0-9.-]+(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?: (.*)"
+
+#temp <- subll[test][1:10]
+#a <- str_match(temp, pattern)
+#as.data.frame(a)
+log_entry <- c(
+  "Jun 15 02:04:59 combo sshd(pam_unix)[20896]: authentication failure; logname= uid=0 euid=0 tty=NODEVssh ruser= rhost=220-135-151-1.hinet-ip.hinet.net  user=root",
+  "Dec  1 02:20:05 ip-172-31-27-153 sshd[23842]: Did not receive identification string from 218.75.153.170", 
+  "Mar 28 19:00:30 ip-10-77-20-248 systemd-logind[1118]: New session 44 of user ubuntu.",
+  "Mar 27 13:08:09 ip-10-77-20-248 systemd: pam_unix(systemd-user:session): session opened for user ubuntu by (uid=0)",
+  "Jul  1 09:01:05 calvisitor-10-105-160-95 com.apple.CDScheduler[43]: Thermal pressure state: 1 Memory pressure state: 0",
+  "Jul  1 09:29:02 calvisitor-10-105-160-95 sandboxd[129] ([31211]): com.apple.Addres(31211) deny network-outbound /private/var/run/mDNSResponder",
+  "Jul  3 17:10:11 calvisitor-10-105-160-184 BezelServices 255.10[94]: ASSERTION FAILED: dvcAddrRef != ((void *)0) -[DriverServices getDeviceAddress:] line: 2789"
+  )
+#pattern <- "([a-zA-Z]{3} +[0-9]{1,2} [0-9:]+) ([^ ]+) ((?:[a-zA-Z-]+(?:\\([^)]+\\))?)+)\\[(\\d+)\\]: (.*)"
+#pattern1 <- "([a-zA-Z]{3} +[0-9]{1,2} [0-9:]+) ([^ ]+) (?:([a-zA-Z0-9\\.\\-]+(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?: (.*)"
+#pattern1 <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) ((?:[a-zA-Z0-9.-]+(?:\\([^)]
+
+
+
+#test <- grepl(pattern1, log_entry)
+#test
+#pattern1 <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) (([a-zA-Z0-9.-]+(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+pattern1 <- "([a-zA-Z]{3} +\\d{1,2} \\d{2}:\\d{2}:\\d{2}) ([^ ]+) ((?:[a-zA-Z0-9.-]+(?:\\s*[a-zA-Z0-9.-]+)*(?:\\([^)]+\\))?)+)(?:\\[(\\d+)\\])?(?:\\s*(?:\\([^)]+\\)))?(?::\\s*)(.*)"
+
+
+
+
+library(stringr)
+
+
+# Apply str_match() to the log_entry
+matches <- str_match(log_entry, pattern1)
+
+# Print the matches matrix
+df <- as.data.frame(matches)
+df <- df[,-1]
+df
+```
